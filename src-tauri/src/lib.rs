@@ -69,13 +69,18 @@ fn wsl_kernel_exists() -> bool {
 #[cfg(target_os = "windows")]
 fn ubuntu_installed() -> bool {
     Command::new("wsl")
-        .args(["--list"])
+        .args(["--list", "--quiet"])
         .output()
         .map(|o| {
-            let out = String::from_utf16_lossy(
-                &o.stdout.chunks(2).map(|c| u16::from_le_bytes([c[0], *c.get(1).unwrap_or(&0)])).collect::<Vec<_>>()
-            );
-            out.contains("Ubuntu")
+            // wsl --list outputs UTF-16 LE on Windows
+            let utf16: Vec<u16> = o.stdout
+                .chunks(2)
+                .map(|c| u16::from_le_bytes([c[0], *c.get(1).unwrap_or(&0)]))
+                .collect();
+            let out = String::from_utf16_lossy(&utf16);
+            // match case-insensitively, strip null chars
+            let out = out.replace('\0', "");
+            out.lines().any(|l| l.trim().to_lowercase().starts_with("ubuntu"))
         })
         .unwrap_or(false)
 }
@@ -163,7 +168,7 @@ async fn start_server(app: AppHandle) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         Command::new("wsl")
-            .args(["--", "bash", "-lc", "openclacky server &"])
+            .args(["--", "bash", "-lc", "nohup openclacky server > /tmp/openclacky.log 2>&1 &"])
             .spawn()
             .map_err(|e| e.to_string())?;
     }
@@ -171,12 +176,24 @@ async fn start_server(app: AppHandle) -> Result<(), String> {
     #[cfg(not(target_os = "windows"))]
     {
         Command::new("bash")
-            .args(["-lc", "openclacky server &"])
+            .args(["-lc", "nohup openclacky server > /tmp/openclacky.log 2>&1 &"])
             .spawn()
             .map_err(|e| e.to_string())?;
     }
 
-    Ok(())
+    // Wait up to 60s for server to be ready
+    for i in 0..60 {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        if std::net::TcpStream::connect("127.0.0.1:7070").is_ok() {
+            emit_log(&app, "==> Server is ready.");
+            return Ok(());
+        }
+        if i % 10 == 9 {
+            emit_log(&app, &format!("==> Waiting for server... ({}s)", i + 1));
+        }
+    }
+
+    Err("Server did not start within 60 seconds.".to_string())
 }
 
 #[tauri::command]
