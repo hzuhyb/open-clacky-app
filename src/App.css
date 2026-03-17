@@ -1,0 +1,105 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: Inter, system-ui, sans-serif;
+  background: #0f0f0f;
+  color: #f0f0f0;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.installer {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  padding: 32px;
+  gap: 24px;
+}
+
+.installer-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.installer-header h1 {
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.installer-status {
+  font-size: 14px;
+  color: #888;
+}
+
+.progress-bar {
+  height: 4px;
+  background: #2a2a2a;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 40%;
+  background: #646cff;
+  border-radius: 2px;
+  animation: progress-slide 1.5s ease-in-out infinite;
+}
+
+@keyframes progress-slide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
+
+.log-box {
+  flex: 1;
+  background: #1a1a1a;
+  border-radius: 8px;
+  padding: 16px;
+  overflow-y: auto;
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.log-line {
+  color: #ccc;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.error-box {
+  background: #2a1a1a;
+  border: 1px solid #5a2a2a;
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.error-box p {
+  font-size: 13px;
+  color: #ff6b6b;
+}
+
+.error-box button {
+  padding: 8px 16px;
+  background: #646cff;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.error-box button:hover {
+  background: #535bf2;
+}
