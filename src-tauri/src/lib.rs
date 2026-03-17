@@ -1,6 +1,12 @@
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
+
+const INSTALL_SCRIPT_URL: &str = "https://raw.githubusercontent.com/clacky-ai/open-clacky/main/scripts/install.sh";
+const UBUNTU_WSL_URL: &str = "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cloud-images/wsl/jammy/20250318/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz";
+const UBUNTU_WSL_INSTALL_DIR: &str = r"C:\WSL\Ubuntu";
+const SERVER_HOST: &str = "127.0.0.1";
+const SERVER_PORT: u16 = 7070;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -60,23 +66,20 @@ fn run_streaming(app: &AppHandle, program: &str, args: &[&str]) -> Result<(), St
     }
 }
 
-fn is_installed() -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        no_window!(Command::new("wsl")
-            .args(["--", "bash", "-lc", "command -v openclacky"]))
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+fn installed_marker(app: &AppHandle) -> std::path::PathBuf {
+    app.path().app_data_dir().unwrap().join("installed")
+}
+
+fn is_installed(app: &AppHandle) -> bool {
+    installed_marker(app).exists()
+}
+
+fn mark_installed(app: &AppHandle) {
+    let marker = installed_marker(app);
+    if let Some(parent) = marker.parent() {
+        let _ = std::fs::create_dir_all(parent);
     }
-    #[cfg(not(target_os = "windows"))]
-    {
-        no_window!(Command::new("bash")
-            .args(["-lc", "command -v openclacky"]))
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    }
+    let _ = std::fs::write(&marker, "1");
 }
 
 #[cfg(target_os = "windows")]
@@ -122,8 +125,8 @@ fn enable_wsl_features(app: &AppHandle) -> Result<(), String> {
 #[cfg(target_os = "windows")]
 fn install_ubuntu(app: &AppHandle) -> Result<(), String> {
     let tar_path = format!("{}\\ubuntu-wsl.tar.gz", std::env::temp_dir().display());
-    let install_dir = r"C:\WSL\Ubuntu";
-    let url = "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cloud-images/wsl/jammy/20250318/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz";
+    let install_dir = UBUNTU_WSL_INSTALL_DIR;
+    let url = UBUNTU_WSL_URL;
 
     emit_log(app, "==> Downloading Ubuntu from Tsinghua mirror (~350MB)...");
     run_streaming(app, "powershell", &[
@@ -144,7 +147,7 @@ fn install_ubuntu(app: &AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 async fn install(app: AppHandle) -> Result<(), String> {
-    if is_installed() {
+    if is_installed(&app) {
         emit_log(&app, "==> OpenClacky is already installed.");
         return Ok(());
     }
@@ -161,21 +164,22 @@ async fn install(app: AppHandle) -> Result<(), String> {
         }
 
         emit_log(&app, "==> Installing OpenClacky inside WSL...");
-        run_streaming(&app, "wsl", &["--", "bash", "-c", "curl -fsSL https://raw.githubusercontent.com/clacky-ai/open-clacky/main/scripts/install.sh | bash"])?;
+        run_streaming(&app, "wsl", &["--", "bash", "-c", &format!("curl -fsSL {} | bash", INSTALL_SCRIPT_URL)])?;
     }
 
     #[cfg(not(target_os = "windows"))]
     {
         emit_log(&app, "==> Installing OpenClacky...");
-        run_streaming(&app, "bash", &["-c", "curl -fsSL https://raw.githubusercontent.com/clacky-ai/open-clacky/main/scripts/install.sh | bash"])?;
+        run_streaming(&app, "bash", &["-c", &format!("curl -fsSL {} | bash", INSTALL_SCRIPT_URL)])?;
     }
 
+    mark_installed(&app);
     emit_log(&app, "==> Installation complete!");
     Ok(())
 }
 
 fn server_addr() -> String {
-    "127.0.0.1:7070".to_string()
+    format!("{}:{}", SERVER_HOST, SERVER_PORT)
 }
 
 #[tauri::command]
@@ -229,17 +233,11 @@ async fn check_server() -> Option<String> {
     }
 }
 
-#[tauri::command]
-async fn open_app(window: tauri::WebviewWindow) -> Result<(), String> {
-    let _ = window.navigate("http://127.0.0.1:7070".parse().unwrap());
-    Ok(())
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![install, start_server, check_server, open_app])
+        .invoke_handler(tauri::generate_handler![install, start_server, check_server])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
