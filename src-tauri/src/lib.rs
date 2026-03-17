@@ -2,15 +2,33 @@ use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use tauri::{AppHandle, Emitter};
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[cfg(target_os = "windows")]
+macro_rules! no_window {
+    ($cmd:expr) => {
+        $cmd.creation_flags(CREATE_NO_WINDOW)
+    };
+}
+#[cfg(not(target_os = "windows"))]
+macro_rules! no_window {
+    ($cmd:expr) => {
+        $cmd
+    };
+}
+
 fn emit_log(app: &AppHandle, line: &str) {
     let _ = app.emit("install-log", line.to_string());
 }
 
 fn run_streaming(app: &AppHandle, program: &str, args: &[&str]) -> Result<(), String> {
-    let mut child = Command::new(program)
+    let mut child = no_window!(Command::new(program)
         .args(args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped()))
         .spawn()
         .map_err(|e| e.to_string())?;
 
@@ -45,16 +63,16 @@ fn run_streaming(app: &AppHandle, program: &str, args: &[&str]) -> Result<(), St
 fn is_installed() -> bool {
     #[cfg(target_os = "windows")]
     {
-        Command::new("wsl")
-            .args(["--", "bash", "-c", "command -v openclacky"])
+        no_window!(Command::new("wsl")
+            .args(["--", "bash", "-lc", "command -v openclacky"]))
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
     }
     #[cfg(not(target_os = "windows"))]
     {
-        Command::new("bash")
-            .args(["-c", "command -v openclacky"])
+        no_window!(Command::new("bash")
+            .args(["-lc", "command -v openclacky"]))
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
@@ -68,14 +86,19 @@ fn wsl_kernel_exists() -> bool {
 
 #[cfg(target_os = "windows")]
 fn ubuntu_installed() -> bool {
-    Command::new("wsl")
-        .args(["--list"])
+    no_window!(Command::new("wsl")
+        .args(["--list", "--quiet"]))
         .output()
         .map(|o| {
-            let out = String::from_utf16_lossy(
-                &o.stdout.chunks(2).map(|c| u16::from_le_bytes([c[0], *c.get(1).unwrap_or(&0)])).collect::<Vec<_>>()
-            );
-            out.contains("Ubuntu")
+            // wsl --list outputs UTF-16 LE on Windows
+            let utf16: Vec<u16> = o.stdout
+                .chunks(2)
+                .map(|c| u16::from_le_bytes([c[0], *c.get(1).unwrap_or(&0)]))
+                .collect();
+            let out = String::from_utf16_lossy(&utf16);
+            // match case-insensitively, strip null chars
+            let out = out.replace('\0', "");
+            out.lines().any(|l| l.trim().to_lowercase().starts_with("ubuntu"))
         })
         .unwrap_or(false)
 }
@@ -151,37 +174,78 @@ async fn install(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
+fn wsl_ip() -> Option<String> {
+    let out = no_window!(Command::new("wsl")
+        .args(["--", "bash", "-c", "hostname -I | awk '{print $1}'"]))
+        .output()
+        .ok()?;
+    let ip = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if ip.is_empty() { None } else { Some(ip) }
+}
+
+fn server_addr() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        wsl_ip()
+            .map(|ip| format!("{}:7070", ip))
+            .unwrap_or_else(|| "127.0.0.1:7070".to_string())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "127.0.0.1:7070".to_string()
+    }
+}
+
 #[tauri::command]
-async fn start_server(app: AppHandle) -> Result<(), String> {
-    if std::net::TcpStream::connect("127.0.0.1:7070").is_ok() {
+async fn start_server(app: AppHandle) -> Result<String, String> {
+    let addr = server_addr();
+
+    if std::net::TcpStream::connect(&addr).is_ok() {
         emit_log(&app, "==> Server already running.");
-        return Ok(());
+        return Ok(format!("http://{}", addr));
     }
 
     emit_log(&app, "==> Starting OpenClacky server...");
 
     #[cfg(target_os = "windows")]
     {
-        Command::new("wsl")
-            .args(["--", "bash", "-lc", "openclacky server &"])
+        no_window!(Command::new("wsl")
+            .args(["--", "bash", "-lc", "nohup openclacky server > /tmp/openclacky.log 2>&1 &"]))
             .spawn()
             .map_err(|e| e.to_string())?;
     }
 
     #[cfg(not(target_os = "windows"))]
     {
-        Command::new("bash")
-            .args(["-lc", "openclacky server &"])
+        no_window!(Command::new("bash")
+            .args(["-lc", "nohup openclacky server > /tmp/openclacky.log 2>&1 &"]))
             .spawn()
             .map_err(|e| e.to_string())?;
     }
 
-    Ok(())
+    for i in 0..60 {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        if std::net::TcpStream::connect(&addr).is_ok() {
+            emit_log(&app, "==> Server is ready.");
+            return Ok(format!("http://{}", addr));
+        }
+        if i % 10 == 9 {
+            emit_log(&app, &format!("==> Waiting for server... ({}s)", i + 1));
+        }
+    }
+
+    Err("Server did not start within 60 seconds.".to_string())
 }
 
 #[tauri::command]
-async fn check_server() -> bool {
-    std::net::TcpStream::connect("127.0.0.1:7070").is_ok()
+async fn check_server() -> Option<String> {
+    let addr = server_addr();
+    if std::net::TcpStream::connect(&addr).is_ok() {
+        Some(format!("http://{}", addr))
+    } else {
+        None
+    }
 }
 
 #[tauri::command]

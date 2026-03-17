@@ -21,12 +21,19 @@ export default function App() {
     });
 
     invoke("install")
-      .then(() => invoke<boolean>("check_server"))
-      .then((running) => {
+      .then(() => invoke<string | null>("check_server"))
+      .then((url) => {
         setPhase("starting");
-        return running ? Promise.resolve() : invoke("start_server");
+        if (url) {
+          setPhase("ready");
+          window.location.href = url;
+          return;
+        }
+        return invoke<string>("start_server").then((serverUrl) => {
+          setPhase("ready");
+          window.location.href = serverUrl;
+        });
       })
-      .then(() => waitForServer())
       .catch((e) => {
         if (String(e).includes("REBOOT_REQUIRED")) {
           setError("WSL components installed. Please restart your computer, then reopen the app.");
@@ -41,10 +48,10 @@ export default function App() {
 
   async function waitForServer() {
     for (let i = 0; i < 60; i++) {
-      const ready = await invoke<boolean>("check_server");
-      if (ready) {
+      const url = await invoke<string | null>("check_server");
+      if (url) {
         setPhase("ready");
-        await invoke("open_app");
+        window.location.href = url;
         return;
       }
       await new Promise((r) => setTimeout(r, 1000));
