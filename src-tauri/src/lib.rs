@@ -174,27 +174,8 @@ async fn install(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(target_os = "windows")]
-fn wsl_ip() -> Option<String> {
-    let out = no_window!(Command::new("wsl")
-        .args(["--", "bash", "-c", "hostname -I | awk '{print $1}'"]))
-        .output()
-        .ok()?;
-    let ip = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if ip.is_empty() { None } else { Some(ip) }
-}
-
 fn server_addr() -> String {
-    #[cfg(target_os = "windows")]
-    {
-        wsl_ip()
-            .map(|ip| format!("{}:7070", ip))
-            .unwrap_or_else(|| "127.0.0.1:7070".to_string())
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        "127.0.0.1:7070".to_string()
-    }
+    "127.0.0.1:7070".to_string()
 }
 
 #[tauri::command]
