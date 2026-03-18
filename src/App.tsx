@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import "./App.css";
 
-type Phase = "installing" | "error";
+type Phase = "installing" | "reboot" | "error";
 
 export default function App() {
   const [phase, setPhase] = useState<Phase>("installing");
-  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
   const [logs, setLogs] = useState<string[]>([]);
   const logsEndRef = useRef<HTMLDivElement>(null);
 
@@ -19,13 +19,19 @@ export default function App() {
       setLogs((prev) => [...prev, e.payload]);
     });
 
+    const unlistenReboot = listen<string>("install-reboot", (e) => {
+      setMessage(e.payload);
+      setPhase("reboot");
+    });
+
     const unlistenError = listen<string>("install-error", (e) => {
-      setError(e.payload);
+      setMessage(e.payload);
       setPhase("error");
     });
 
     return () => {
       unlistenLog.then((f) => f());
+      unlistenReboot.then((f) => f());
       unlistenError.then((f) => f());
     };
   }, []);
@@ -34,7 +40,7 @@ export default function App() {
     <div className="installer">
       <div className="installer-header">
         <p className="installer-status">
-          {phase === "installing" ? "Installing..." : "Installation failed"}
+          {phase === "installing" ? "Installing..." : phase === "reboot" ? "Restart required" : "Installation failed"}
         </p>
         {phase === "installing" && <div className="progress-bar"><div className="progress-fill" /></div>}
       </div>
@@ -44,9 +50,15 @@ export default function App() {
         <div ref={logsEndRef} />
       </div>
 
+      {phase === "reboot" && (
+        <div className="info-box">
+          <p>{message}</p>
+        </div>
+      )}
+
       {phase === "error" && (
         <div className="error-box">
-          <p>{error}</p>
+          <p>{message}</p>
           <button onClick={() => window.location.reload()}>Retry</button>
         </div>
       )}

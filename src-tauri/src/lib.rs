@@ -86,7 +86,10 @@ fn mark_installed(app: &AppHandle) {
 
 #[cfg(target_os = "windows")]
 fn wsl_kernel_exists() -> bool {
-    std::path::Path::new(r"C:\Windows\System32\lxss\tools\init").exists()
+    no_window!(Command::new("wsl").arg("--status"))
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 #[cfg(target_os = "windows")]
@@ -309,12 +312,11 @@ pub fn run() {
                     }
                 }
                 if let Err(e) = do_install(&app_handle) {
-                    let msg = if e.contains("REBOOT_REQUIRED") {
-                        "WSL components installed. Please restart your computer, then reopen the app.".to_string()
+                    if e.contains("REBOOT_REQUIRED") {
+                        let _ = app_handle.emit("install-reboot", "WSL components installed. Please restart your computer, then reopen the app.");
                     } else {
-                        e
-                    };
-                    let _ = app_handle.emit("install-error", msg);
+                        let _ = app_handle.emit("install-error", e);
+                    }
                     return;
                 }
                 if let Some(window) = app_handle.get_webview_window("main") {
