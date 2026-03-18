@@ -301,12 +301,27 @@ pub fn run() {
             // Auto start on launch
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {
+                let already_installed = is_installed(&app_handle);
+                if !already_installed {
+                    if let Some(window) = app_handle.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                }
                 if let Err(e) = do_install(&app_handle) {
-                    eprintln!("Install error: {}", e);
+                    let msg = if e.contains("REBOOT_REQUIRED") {
+                        "WSL components installed. Please restart your computer, then reopen the app.".to_string()
+                    } else {
+                        e
+                    };
+                    let _ = app_handle.emit("install-error", msg);
                     return;
                 }
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    let _ = window.hide();
+                }
                 if let Err(e) = do_start_server() {
-                    eprintln!("Start error: {}", e);
+                    let _ = app_handle.emit("install-error", e);
                     return;
                 }
                 update_tray_menu(&app_handle);
