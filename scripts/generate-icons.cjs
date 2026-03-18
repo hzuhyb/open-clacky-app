@@ -40,7 +40,6 @@ function makeSvg(size, bgColor = null, paddingPercent = 0) {
     ? `<rect x="${p}" y="${p}" width="${inner}" height="${inner}" rx="${radius}" ry="${radius}" fill="${bgColor}"/>`
     : '';
   const logoPad = Math.round(size * (paddingPercent + 0.08));
-  console.log('logoPad', logoPad);
   const logoSize = size - logoPad * 2;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
   ${bg}
