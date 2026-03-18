@@ -6,6 +6,8 @@ const INSTALL_SCRIPT_URL: &str = "https://clackyai-1258723534.cos.ap-guangzhou.m
 #[cfg(target_os = "windows")]
 const UBUNTU_WSL_URL: &str = "https://clackyai-1258723534.cos.ap-guangzhou.myqcloud.com/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz";
 #[cfg(target_os = "windows")]
+const WSL_UPDATE_URL: &str = "https://clackyai-1258723534.cos.ap-guangzhou.myqcloud.com/wsl_update_x64.msi";
+#[cfg(target_os = "windows")]
 const UBUNTU_WSL_INSTALL_DIR: &str = r"C:\WSL\Ubuntu";
 const SERVER_HOST: &str = "127.0.0.1";
 const SERVER_PORT: u16 = 7070;
@@ -97,10 +99,17 @@ fn mark_installed(app: &AppHandle) {
 }
 
 #[cfg(target_os = "windows")]
+fn wsl_feature_enabled() -> bool {
+    // wsl.exe exists means WSL Windows feature is enabled
+    std::path::Path::new(r"C:\Windows\System32\wsl.exe").exists()
+}
+
+#[cfg(target_os = "windows")]
 fn wsl_kernel_exists() -> bool {
-    no_window!(Command::new("wsl.exe").arg("--status"))
+    // exit code -444 means WSL2 kernel file is missing
+    no_window!(Command::new("wsl.exe").arg("--list"))
         .output()
-        .map(|o| o.status.success())
+        .map(|o| o.status.code() != Some(-444))
         .unwrap_or(false)
 }
 
@@ -129,6 +138,20 @@ fn enable_wsl_features(app: &AppHandle) -> Result<(), String> {
          dism /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart'
     "#;
     run_streaming(app, "powershell", &["-Command", script])?;
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn install_wsl_kernel(app: &AppHandle) -> Result<(), String> {
+    let msi_path = format!("{}\\wsl_update.msi", std::env::temp_dir().display());
+    emit_log(app, "==> Downloading WSL2 kernel update...");
+    run_streaming(app, "powershell", &[
+        "-Command",
+        &format!("Invoke-WebRequest -Uri '{}' -OutFile '{}' -UseBasicParsing", WSL_UPDATE_URL, msi_path),
+    ])?;
+    emit_log(app, "==> Installing WSL2 kernel...");
+    run_streaming(app, "msiexec", &["/i", &msi_path, "/quiet", "/norestart"])?;
+    emit_log(app, "==> WSL2 kernel installed.");
     Ok(())
 }
 
@@ -162,9 +185,12 @@ fn do_install(app: &AppHandle) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        if !wsl_kernel_exists() {
+        if !wsl_feature_enabled() {
             enable_wsl_features(app)?;
             return Err("REBOOT_REQUIRED".to_string());
+        }
+        if !wsl_kernel_exists() {
+            install_wsl_kernel(app)?;
         }
         if !ubuntu_installed() {
             install_ubuntu(app)?;
