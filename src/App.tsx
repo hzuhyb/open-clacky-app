@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
 type Phase = "installing" | "reboot" | "error";
@@ -53,6 +54,7 @@ export default function App() {
       {phase === "reboot" && (
         <div className="info-box">
           <p>{message}</p>
+          <button onClick={() => invoke("reboot_system")}>Restart Now</button>
         </div>
       )}
 

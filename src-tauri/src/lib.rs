@@ -28,6 +28,18 @@ macro_rules! no_window {
     };
 }
 
+#[tauri::command]
+fn reboot_system() {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = Command::new("shutdown").args(["/r", "/t", "0"]).spawn();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = Command::new("shutdown").args(["-r", "now"]).spawn();
+    }
+}
+
 fn emit_log(app: &AppHandle, line: &str) {
     let _ = app.emit("install-log", line.to_string());
 }
@@ -331,7 +343,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![])
+        .invoke_handler(tauri::generate_handler![reboot_system])
         .build(tauri::generate_context!())
         .expect("failed to start")
         .run(|_app, _event| {});

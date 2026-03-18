@@ -78,11 +78,30 @@ body {
   border: 1px solid #2a5a2a;
   border-radius: 8px;
   padding: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
 }
 
 .info-box p {
   font-size: 13px;
   color: #6bcb6b;
+}
+
+.info-box button {
+  padding: 8px 16px;
+  background: #3b82f6;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.info-box button:hover {
+  background: #2563eb;
 }
 
 .error-box {
