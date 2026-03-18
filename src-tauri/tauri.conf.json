@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "open-clacky-app",
+  "productName": "Clacky",
   "version": "0.1.0",
   "identifier": "com.robin.open-clacky-app",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "OpenClacky",
+        "title": "Clacky",
         "width": 900,
         "height": 600,
         "resizable": true,

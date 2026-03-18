@@ -46,20 +46,6 @@ export default function App() {
     return () => { unlisten.then((f) => f()); };
   }, []);
 
-  async function waitForServer() {
-    for (let i = 0; i < 60; i++) {
-      const url = await invoke<string | null>("check_server");
-      if (url) {
-        setPhase("ready");
-        window.location.href = url;
-        return;
-      }
-      await new Promise((r) => setTimeout(r, 1000));
-    }
-    setError("Server did not start within 60 seconds.");
-    setPhase("error");
-  }
-
   return (
     <div className="installer">
       <div className="installer-header">
