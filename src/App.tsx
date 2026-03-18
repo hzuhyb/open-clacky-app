@@ -58,7 +58,10 @@ export default function App() {
       </div>
 
       <div className="log-box">
-        {logs.map((line, i) => <div key={i} className="log-line">{line}</div>)}
+        {logs.length === 0
+          ? <div className="log-line log-placeholder">Waiting...</div>
+          : logs.map((line, i) => <div key={i} className="log-line">{line}</div>)
+        }
         <div ref={logsEndRef} />
       </div>
 

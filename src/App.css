@@ -104,6 +104,11 @@ body {
   background: #2563eb;
 }
 
+.log-placeholder {
+  color: #555;
+  font-style: italic;
+}
+
 .error-box {
   background: #2a1a1a;
   border: 1px solid #5a2a2a;

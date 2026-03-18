@@ -145,11 +145,13 @@ fn enable_wsl_features(app: &AppHandle) -> Result<(), String> {
 fn install_wsl_kernel(app: &AppHandle) -> Result<(), String> {
     let msi_path = format!("{}\\wsl_update.msi", std::env::temp_dir().display());
     emit_log(app, "==> Downloading WSL2 kernel update...");
-    run_streaming(app, "powershell", &[
-        "-Command",
-        &format!("Invoke-WebRequest -Uri '{}' -OutFile '{}' -UseBasicParsing", WSL_UPDATE_URL, msi_path),
-    ])?;
-    emit_log(app, "==> Installing WSL2 kernel...");
+    if run_streaming(app, "curl", &["-L", "--progress-bar", WSL_UPDATE_URL, "-o", &msi_path]).is_err() {
+        run_streaming(app, "powershell", &[
+            "-Command",
+            &format!("Invoke-WebRequest -Uri '{}' -OutFile '{}' -UseBasicParsing", WSL_UPDATE_URL, msi_path),
+        ])?;
+    }
+    emit_log(app, "==> Download complete. Installing WSL2 kernel...");
     run_streaming(app, "msiexec", &["/i", &msi_path, "/quiet", "/norestart"])?;
     emit_log(app, "==> WSL2 kernel installed.");
     Ok(())
