@@ -98,7 +98,7 @@ fn mark_installed(app: &AppHandle) {
 
 #[cfg(target_os = "windows")]
 fn wsl_kernel_exists() -> bool {
-    no_window!(Command::new("wsl").arg("--status"))
+    no_window!(Command::new("wsl.exe").arg("--status"))
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
