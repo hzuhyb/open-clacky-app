@@ -2,9 +2,9 @@ use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use tauri::{AppHandle, Emitter, Manager};
 
-const INSTALL_SCRIPT_URL: &str = "https://raw.githubusercontent.com/clacky-ai/open-clacky/main/scripts/install.sh";
+const INSTALL_SCRIPT_URL: &str = "https://clackyai-1258723534.cos.ap-guangzhou.myqcloud.com/install.sh";
 #[cfg(target_os = "windows")]
-const UBUNTU_WSL_URL: &str = "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cloud-images/wsl/jammy/20250318/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz";
+const UBUNTU_WSL_URL: &str = "https://clackyai-1258723534.cos.ap-guangzhou.myqcloud.com/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz";
 #[cfg(target_os = "windows")]
 const UBUNTU_WSL_INSTALL_DIR: &str = r"C:\WSL\Ubuntu";
 const SERVER_HOST: &str = "127.0.0.1";
@@ -95,14 +95,11 @@ fn ubuntu_installed() -> bool {
         .args(["--list", "--quiet"]))
         .output()
         .map(|o| {
-            // wsl --list outputs UTF-16 LE on Windows
             let utf16: Vec<u16> = o.stdout
                 .chunks(2)
                 .map(|c| u16::from_le_bytes([c[0], *c.get(1).unwrap_or(&0)]))
                 .collect();
-            let out = String::from_utf16_lossy(&utf16);
-            // match case-insensitively, strip null chars
-            let out = out.replace('\0', "");
+            let out = String::from_utf16_lossy(&utf16).replace('\0', "");
             out.lines().any(|l| l.trim().to_lowercase().starts_with("ubuntu"))
         })
         .unwrap_or(false)
@@ -111,16 +108,12 @@ fn ubuntu_installed() -> bool {
 #[cfg(target_os = "windows")]
 fn enable_wsl_features(app: &AppHandle) -> Result<(), String> {
     emit_log(app, "==> Enabling WSL components (requires admin)...");
-    run_streaming(app, "dism", &[
-        "/online", "/enable-feature",
-        "/featurename:Microsoft-Windows-Subsystem-Linux",
-        "/all", "/norestart",
-    ])?;
-    run_streaming(app, "dism", &[
-        "/online", "/enable-feature",
-        "/featurename:VirtualMachinePlatform",
-        "/all", "/norestart",
-    ])?;
+    let script = r#"
+        Start-Process powershell -Verb RunAs -Wait -ArgumentList '-Command',
+        'dism /online /enable-feature /featurename:Microsoft-Windows-Subsystem-Linux /all /norestart;
+         dism /online /enable-feature /featurename:VirtualMachinePlatform /all /norestart'
+    "#;
+    run_streaming(app, "powershell", &["-Command", script])?;
     Ok(())
 }
 
@@ -147,36 +140,31 @@ fn install_ubuntu(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-async fn install(app: AppHandle) -> Result<(), String> {
-    if is_installed(&app) {
-        emit_log(&app, "==> OpenClacky is already installed.");
+fn do_install(app: &AppHandle) -> Result<(), String> {
+    if is_installed(app) {
         return Ok(());
     }
 
     #[cfg(target_os = "windows")]
     {
         if !wsl_kernel_exists() {
-            enable_wsl_features(&app)?;
+            enable_wsl_features(app)?;
             return Err("REBOOT_REQUIRED".to_string());
         }
-
         if !ubuntu_installed() {
-            install_ubuntu(&app)?;
+            install_ubuntu(app)?;
         }
-
-        emit_log(&app, "==> Installing OpenClacky inside WSL...");
-        run_streaming(&app, "wsl", &["--", "bash", "-c", &format!("curl -fsSL {} | bash", INSTALL_SCRIPT_URL)])?;
+        emit_log(app, "==> Installing OpenClacky inside WSL...");
+        run_streaming(app, "wsl", &["--", "bash", "-c", &format!("curl -fsSL {} | bash", INSTALL_SCRIPT_URL)])?;
     }
 
     #[cfg(not(target_os = "windows"))]
     {
-        emit_log(&app, "==> Installing OpenClacky...");
-        run_streaming(&app, "bash", &["-c", &format!("curl -fsSL {} | bash", INSTALL_SCRIPT_URL)])?;
+        emit_log(app, "==> Installing OpenClacky...");
+        run_streaming(app, "bash", &["-c", &format!("curl -fsSL {} | bash", INSTALL_SCRIPT_URL)])?;
     }
 
-    mark_installed(&app);
-    emit_log(&app, "==> Installation complete!");
+    mark_installed(app);
     Ok(())
 }
 
@@ -184,16 +172,14 @@ fn server_addr() -> String {
     format!("{}:{}", SERVER_HOST, SERVER_PORT)
 }
 
-#[tauri::command]
-async fn start_server(app: AppHandle) -> Result<String, String> {
-    let addr = server_addr();
+fn is_server_running() -> bool {
+    std::net::TcpStream::connect(server_addr()).is_ok()
+}
 
-    if std::net::TcpStream::connect(&addr).is_ok() {
-        emit_log(&app, "==> Server already running.");
-        return Ok(format!("http://{}", addr));
+fn do_start_server() -> Result<(), String> {
+    if is_server_running() {
+        return Ok(());
     }
-
-    emit_log(&app, "==> Starting OpenClacky server...");
 
     #[cfg(target_os = "windows")]
     {
@@ -211,27 +197,52 @@ async fn start_server(app: AppHandle) -> Result<String, String> {
             .map_err(|e| e.to_string())?;
     }
 
-    for i in 0..60 {
+    for _ in 0..60 {
         std::thread::sleep(std::time::Duration::from_secs(1));
-        if std::net::TcpStream::connect(&addr).is_ok() {
-            emit_log(&app, "==> Server is ready.");
-            return Ok(format!("http://{}", addr));
-        }
-        if i % 10 == 9 {
-            emit_log(&app, &format!("==> Waiting for server... ({}s)", i + 1));
+        if is_server_running() {
+            return Ok(());
         }
     }
 
     Err("Server did not start within 60 seconds.".to_string())
 }
 
-#[tauri::command]
-async fn check_server() -> Option<String> {
-    let addr = server_addr();
-    if std::net::TcpStream::connect(&addr).is_ok() {
-        Some(format!("http://{}", addr))
-    } else {
-        None
+fn do_stop_server() {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = no_window!(Command::new("wsl")
+            .args(["--", "bash", "-c", "pkill -f 'openclacky server'"]))
+            .output();
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = Command::new("pkill")
+            .args(["-f", "openclacky server"])
+            .output();
+    }
+}
+
+fn update_tray_menu(app: &AppHandle) {
+    let running = is_server_running();
+    if let Some(tray) = app.tray_by_id("main") {
+        let open = tauri::menu::MenuItemBuilder::new("Open").id("open").build(app).unwrap();
+        let start = tauri::menu::MenuItemBuilder::new("Start")
+            .id("start")
+            .enabled(!running)
+            .build(app)
+            .unwrap();
+        let stop = tauri::menu::MenuItemBuilder::new("Stop")
+            .id("stop")
+            .enabled(running)
+            .build(app)
+            .unwrap();
+        let quit = tauri::menu::MenuItemBuilder::new("Quit").id("quit").build(app).unwrap();
+        let menu = tauri::menu::MenuBuilder::new(app)
+            .items(&[&open, &start, &stop, &quit])
+            .build()
+            .unwrap();
+        let _ = tray.set_menu(Some(menu));
     }
 }
 
@@ -240,53 +251,71 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let show = tauri::menu::MenuItemBuilder::new("Show").id("show").build(app)?;
+            // Hide from Dock on macOS
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+            let open = tauri::menu::MenuItemBuilder::new("Open").id("open").build(app)?;
+            let start = tauri::menu::MenuItemBuilder::new("Start").id("start").build(app)?;
+            let stop = tauri::menu::MenuItemBuilder::new("Stop").id("stop").enabled(false).build(app)?;
             let quit = tauri::menu::MenuItemBuilder::new("Quit").id("quit").build(app)?;
-            let menu = tauri::menu::MenuBuilder::new(app).items(&[&show, &quit]).build()?;
+            let menu = tauri::menu::MenuBuilder::new(app).items(&[&open, &start, &stop, &quit]).build()?;
+
             let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png")).unwrap();
-            let _tray = tauri::tray::TrayIconBuilder::new()
+            let _tray = tauri::tray::TrayIconBuilder::with_id("main")
                 .icon(tray_icon)
                 .icon_as_template(true)
                 .menu(&menu)
                 .show_menu_on_left_click(true)
                 .on_menu_event(|app, event| match event.id().as_ref() {
-                    "show" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
+                    "open" => {
+                        let url = format!("http://{}:{}", SERVER_HOST, SERVER_PORT);
+                        let _ = tauri_plugin_opener::open_url(url, None::<&str>);
+                    }
+                    "start" => {
+                        let app = app.clone();
+                        std::thread::spawn(move || {
+                            if let Err(e) = do_install(&app) {
+                                eprintln!("Install error: {}", e);
+                                return;
+                            }
+                            if let Err(e) = do_start_server() {
+                                eprintln!("Start error: {}", e);
+                                return;
+                            }
+                            update_tray_menu(&app);
+                        });
+                    }
+                    "stop" => {
+                        let app = app.clone();
+                        std::thread::spawn(move || {
+                            do_stop_server();
+                            update_tray_menu(&app);
+                        });
                     }
                     "quit" => app.exit(0),
                     _ => {}
                 })
-                .on_tray_icon_event(|tray, event| {
-                    if let tauri::tray::TrayIconEvent::Click { .. } = event {
-                        let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
-                    }
-                })
                 .build(app)?;
+
+            // Auto start on launch
+            let app_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                if let Err(e) = do_install(&app_handle) {
+                    eprintln!("Install error: {}", e);
+                    return;
+                }
+                if let Err(e) = do_start_server() {
+                    eprintln!("Start error: {}", e);
+                    return;
+                }
+                update_tray_menu(&app_handle);
+            });
+
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                window.hide().unwrap();
-                api.prevent_close();
-            }
-        })
-        .invoke_handler(tauri::generate_handler![install, start_server, check_server])
+        .invoke_handler(tauri::generate_handler![])
         .build(tauri::generate_context!())
         .expect("failed to start")
-        .run(|app, event| {
-            #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Reopen { .. } = event {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
-            }
-        });
+        .run(|_app, _event| {});
 }

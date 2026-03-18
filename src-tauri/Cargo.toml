@@ -1,7 +1,7 @@
 [package]
-name = "Clacky"
+name = "OpenClacky"
 version = "0.1.0"
-description = "Clacky"
+description = "OpenClacky"
 authors = ["you"]
 edition = "2021"
 
