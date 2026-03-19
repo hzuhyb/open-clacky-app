@@ -200,7 +200,7 @@ fn do_install(app: &AppHandle) -> Result<(), String> {
             install_ubuntu(app)?;
         }
         emit_log(app, "==> Installing OpenClacky inside WSL...");
-        run_streaming(app, "wsl", &["--", "bash", "-c", &format!("curl -fsSL {} | bash", INSTALL_SCRIPT_URL)])?;
+        run_streaming(app, "wsl", &["--", "bash", "-c", &format!("cd ~ && curl -fsSL {} | bash", INSTALL_SCRIPT_URL)])?;
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -229,7 +229,7 @@ fn do_start_server() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         no_window!(Command::new("wsl")
-            .args(["--", "bash", "-lc", "~/.local/bin/mise exec ruby -- openclacky server > /tmp/openclacky.log 2>&1"])
+            .args(["--", "bash", "-lc", "cd ~ && ~/.local/bin/mise exec ruby -- openclacky server > /tmp/openclacky.log 2>&1"])
             .stdout(Stdio::null())
             .stderr(Stdio::null()))
             .spawn()
