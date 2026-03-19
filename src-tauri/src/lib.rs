@@ -157,7 +157,10 @@ fn install_wsl_kernel(app: &AppHandle) -> Result<(), String> {
         ])?;
     }
     emit_log(app, "==> Download complete. Installing WSL2 kernel...");
-    run_streaming(app, "msiexec", &["/i", &msi_path, "/quiet", "/norestart"])?;
+    run_streaming(app, "powershell", &[
+        "-Command",
+        &format!("Start-Process msiexec -Verb RunAs -Wait -ArgumentList '/i','{}','/quiet','/norestart'", msi_path),
+    ])?;
     emit_log(app, "==> WSL2 kernel installed.");
     Ok(())
 }
