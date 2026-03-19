@@ -198,12 +198,7 @@ fn do_install(app: &AppHandle) -> Result<(), String> {
             install_ubuntu(app)?;
         }
         emit_log(app, "==> Installing OpenClacky inside WSL...");
-        run_streaming(app, "wsl", &[
-            "--",
-            "env", "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            "bash", "-c",
-            &format!("curl -fsSL {} | bash", INSTALL_SCRIPT_URL),
-        ])?;
+        run_streaming(app, "wsl", &["--", "bash", "-c", &format!("curl -fsSL {} | bash", INSTALL_SCRIPT_URL)])?;
     }
 
     #[cfg(not(target_os = "windows"))]
