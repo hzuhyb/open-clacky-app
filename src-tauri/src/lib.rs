@@ -100,8 +100,10 @@ fn mark_installed(app: &AppHandle) {
 
 #[cfg(target_os = "windows")]
 fn wsl_feature_enabled() -> bool {
-    // wsl.exe exists means WSL Windows feature is enabled
-    std::path::Path::new(r"C:\Windows\System32\wsl.exe").exists()
+    no_window!(Command::new("wsl.exe").arg("--status"))
+        .output()
+        .map(|o| o.status.code() != Some(50))
+        .unwrap_or(false)
 }
 
 #[cfg(target_os = "windows")]
