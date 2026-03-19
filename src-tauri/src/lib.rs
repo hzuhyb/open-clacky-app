@@ -165,11 +165,13 @@ fn install_ubuntu(app: &AppHandle) -> Result<(), String> {
     let install_dir = UBUNTU_WSL_INSTALL_DIR;
     let url = UBUNTU_WSL_URL;
 
-    emit_log(app, "==> Downloading Ubuntu from Tsinghua mirror (~350MB)...");
-    run_streaming(app, "powershell", &[
-        "-Command",
-        &format!("Invoke-WebRequest -Uri '{}' -OutFile '{}' -UseBasicParsing", url, tar_path),
-    ])?;
+    emit_log(app, "==> Downloading Ubuntu (~350MB)...");
+    if run_streaming(app, "curl", &["-L", "--progress-bar", url, "-o", &tar_path]).is_err() {
+        run_streaming(app, "powershell", &[
+            "-Command",
+            &format!("Invoke-WebRequest -Uri '{}' -OutFile '{}' -UseBasicParsing", url, tar_path),
+        ])?;
+    }
     emit_log(app, "==> Download complete.");
 
     emit_log(app, "==> Importing Ubuntu into WSL...");
