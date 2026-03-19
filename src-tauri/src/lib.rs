@@ -100,18 +100,21 @@ fn mark_installed(app: &AppHandle) {
 
 #[cfg(target_os = "windows")]
 fn wsl_feature_enabled() -> bool {
+    // exit 1 = WSL feature not enabled (stub wsl.exe)
+    // exit -1 = feature enabled but kernel missing
+    // exit 0 = fully functional
     no_window!(Command::new("wsl.exe").args(["--list"]))
         .output()
-        .map(|o| o.status.success())
+        .map(|o| o.status.code() != Some(1))
         .unwrap_or(false)
 }
 
 #[cfg(target_os = "windows")]
 fn wsl_kernel_exists() -> bool {
-    // exit code -444 means WSL2 kernel file is missing
+    // exit -1 means WSL2 kernel is missing
     no_window!(Command::new("wsl.exe").arg("--list"))
         .output()
-        .map(|o| o.status.code() != Some(-444))
+        .map(|o| o.status.success())
         .unwrap_or(false)
 }
 
