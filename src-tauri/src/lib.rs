@@ -100,9 +100,9 @@ fn mark_installed(app: &AppHandle) {
 
 #[cfg(target_os = "windows")]
 fn wsl_feature_enabled() -> bool {
-    no_window!(Command::new("wsl.exe").arg("--status"))
+    no_window!(Command::new("wsl.exe").args(["--list"]))
         .output()
-        .map(|o| o.status.code() != Some(50))
+        .map(|o| o.status.success())
         .unwrap_or(false)
 }
 
