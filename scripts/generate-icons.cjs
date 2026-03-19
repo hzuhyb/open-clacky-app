@@ -81,10 +81,36 @@ async function generate() {
   await sharp(Buffer.from(traySvg)).resize(64, 64).png().toFile(path.join(iconsDir, 'tray-icon.png'));
   console.log('✓ tray-icon.png');
 
-  // Generate icon.ico
-  const icoSvg = makeSvg(256, '#FFFFFF', 0.08);
-  await sharp(Buffer.from(icoSvg)).png().toFile(path.join(iconsDir, 'icon.ico'));
-  console.log('✓ icon.ico');
+  // Generate icon.ico with multiple sizes (16, 32, 48, 64, 128, 256)
+  const icoSizes = [16, 32, 48, 64, 128, 256];
+  const icoBuffers = await Promise.all(
+    icoSizes.map(size => sharp(Buffer.from(makeSvg(size, '#FFFFFF', 0.08))).resize(size, size).png().toBuffer())
+  );
+
+  // Build ICO file manually
+  const numImages = icoSizes.length;
+  const headerSize = 6 + numImages * 16;
+  let offset = headerSize;
+  const header = Buffer.alloc(headerSize);
+  header.writeUInt16LE(0, 0); // reserved
+  header.writeUInt16LE(1, 2); // type: icon
+  header.writeUInt16LE(numImages, 4);
+  for (let i = 0; i < numImages; i++) {
+    const size = icoSizes[i];
+    const buf = icoBuffers[i];
+    header.writeUInt8(size === 256 ? 0 : size, 6 + i * 16);     // width
+    header.writeUInt8(size === 256 ? 0 : size, 6 + i * 16 + 1); // height
+    header.writeUInt8(0, 6 + i * 16 + 2);   // color count
+    header.writeUInt8(0, 6 + i * 16 + 3);   // reserved
+    header.writeUInt16LE(1, 6 + i * 16 + 4); // planes
+    header.writeUInt16LE(32, 6 + i * 16 + 6); // bit count
+    header.writeUInt32LE(buf.length, 6 + i * 16 + 8);  // size
+    header.writeUInt32LE(offset, 6 + i * 16 + 12); // offset
+    offset += buf.length;
+  }
+  const icoData = Buffer.concat([header, ...icoBuffers]);
+  require('fs').writeFileSync(path.join(iconsDir, 'icon.ico'), icoData);
+  console.log('✓ icon.ico (16, 32, 48, 64, 128, 256)');
 
   console.log('\nNote: icon.icns requires manual generation on macOS:');
   console.log('  Use the icon.png (1024x1024) with: pnpm tauri icon src-tauri/icons/icon.png');
