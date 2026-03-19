@@ -227,7 +227,7 @@ fn do_start_server() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         no_window!(Command::new("wsl")
-            .args(["--", "bash", "-lc", "nohup ~/.local/bin/mise exec ruby -- openclacky server > /tmp/openclacky.log 2>&1 &"]))
+            .args(["--", "bash", "-lc", "setsid ~/.local/bin/mise exec ruby -- openclacky server > /tmp/openclacky.log 2>&1 < /dev/null &"]))
             .spawn()
             .map_err(|e| e.to_string())?;
     }
