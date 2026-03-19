@@ -4,7 +4,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 const INSTALL_SCRIPT_URL: &str = "https://clackyai-1258723534.cos.ap-guangzhou.myqcloud.com/install.sh";
 #[cfg(target_os = "windows")]
-const UBUNTU_WSL_URL: &str = "https://clackyai-1258723534.cos.ap-guangzhou.myqcloud.com/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz";
+const UBUNTU_WSL_URL: &str = "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cloud-images/wsl/jammy/20250318/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz";
 #[cfg(target_os = "windows")]
 const WSL_UPDATE_URL: &str = "https://clackyai-1258723534.cos.ap-guangzhou.myqcloud.com/wsl_update_x64.msi";
 #[cfg(target_os = "windows")]
