@@ -208,7 +208,7 @@ fn do_install(app: &AppHandle) -> Result<(), String> {
             install_ubuntu(app)?;
         }
         emit_log(app, "==> Installing OpenClacky inside WSL...");
-        run_streaming(app, "wsl", &["-u", "root", "--", "bash", "-c", &format!("cd ~ && curl -fsSL {} | bash", INSTALL_SCRIPT_URL)])?;
+        run_streaming(app, "wsl", &["-d", "Ubuntu", "-u", "root", "--", "bash", "-c", &format!("cd ~ && curl -fsSL {} | bash", INSTALL_SCRIPT_URL)])?;
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -237,7 +237,7 @@ fn do_start_server() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         no_window!(Command::new("wsl")
-            .args(["--", "bash", "-lc", "cd ~ && ~/.local/bin/mise exec ruby -- openclacky server > /tmp/openclacky.log 2>&1"])
+            .args(["-d", "Ubuntu", "-u", "root", "--", "bash", "-lc", "cd ~ && ~/.local/bin/mise exec ruby -- openclacky server > /tmp/openclacky.log 2>&1"])
             .stdout(Stdio::null())
             .stderr(Stdio::null()))
             .spawn()
@@ -268,7 +268,7 @@ fn do_stop_server() {
     #[cfg(target_os = "windows")]
     {
         let _ = no_window!(Command::new("wsl")
-            .args(["--", "bash", "-c", "pkill -f 'openclacky server'"]))
+            .args(["-d", "Ubuntu", "-u", "root", "--", "bash", "-c", "pkill -f 'openclacky server'"]))
             .output();
     }
 
