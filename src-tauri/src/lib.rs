@@ -1,5 +1,7 @@
+use serde::Serialize;
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
+use std::sync::{atomic::{AtomicBool, Ordering}, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter, Manager};
 
 const INSTALL_SCRIPT_URL: &str = "https://clackyai-1258723534.cos.ap-guangzhou.myqcloud.com/install.sh";
@@ -11,6 +13,16 @@ const WSL_UPDATE_URL: &str = "https://clackyai-1258723534.cos.ap-guangzhou.myqcl
 const UBUNTU_WSL_INSTALL_DIR: &str = r"C:\WSL\Ubuntu";
 const SERVER_HOST: &str = "127.0.0.1";
 const SERVER_PORT: u16 = 7070;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TrayBusyState {
+    Idle,
+    Starting,
+    Stopping,
+}
+
+static TRAY_BUSY_STATE: OnceLock<Mutex<TrayBusyState>> = OnceLock::new();
+static APP_IS_QUITTING: AtomicBool = AtomicBool::new(false);
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -86,8 +98,29 @@ fn installed_marker(app: &AppHandle) -> std::path::PathBuf {
     app.path().app_data_dir().unwrap().join("installed")
 }
 
+fn tray_busy_state() -> &'static Mutex<TrayBusyState> {
+    TRAY_BUSY_STATE.get_or_init(|| Mutex::new(TrayBusyState::Idle))
+}
+
+fn set_tray_busy_state(state: TrayBusyState) {
+    if let Ok(mut busy_state) = tray_busy_state().lock() {
+        *busy_state = state;
+    }
+}
+
+fn get_tray_busy_state() -> TrayBusyState {
+    tray_busy_state()
+        .lock()
+        .map(|busy_state| *busy_state)
+        .unwrap_or(TrayBusyState::Idle)
+}
+
 fn is_installed(app: &AppHandle) -> bool {
     installed_marker(app).exists()
+}
+
+fn clear_installed_marker(app: &AppHandle) {
+    let _ = std::fs::remove_file(installed_marker(app));
 }
 
 fn mark_installed(app: &AppHandle) {
@@ -96,6 +129,28 @@ fn mark_installed(app: &AppHandle) {
         let _ = std::fs::create_dir_all(parent);
     }
     let _ = std::fs::write(&marker, "1");
+}
+
+#[cfg(target_os = "windows")]
+fn is_install_valid(_app: &AppHandle) -> bool {
+    if !wsl_feature_enabled() || !wsl_kernel_exists() || !ubuntu_installed() {
+        return false;
+    }
+
+    no_window!(Command::new("wsl")
+        .args(["-d", "Ubuntu", "-u", "root", "--", "bash", "-lc", "command -v openclacky >/dev/null 2>&1"]))
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_install_valid(_app: &AppHandle) -> bool {
+    no_window!(Command::new("bash")
+        .args(["-lc", "command -v openclacky >/dev/null 2>&1"]))
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 #[cfg(target_os = "windows")]
@@ -192,7 +247,11 @@ fn install_ubuntu(app: &AppHandle) -> Result<(), String> {
 
 fn do_install(app: &AppHandle) -> Result<(), String> {
     if is_installed(app) {
-        return Ok(());
+        if is_install_valid(app) {
+            return Ok(());
+        }
+        emit_log(app, "==> Existing installation marker is stale. Reinstalling OpenClacky...");
+        clear_installed_marker(app);
     }
 
     #[cfg(target_os = "windows")]
@@ -280,21 +339,42 @@ fn do_stop_server() {
     }
 }
 
+fn wait_for_server_stop() {
+    for _ in 0..60 {
+        if !is_server_running() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+}
+
 fn update_tray_menu(app: &AppHandle) {
     let running = is_server_running();
+    let busy_state = get_tray_busy_state();
+    let is_busy = busy_state != TrayBusyState::Idle;
     if let Some(tray) = app.tray_by_id("main") {
-        let open = tauri::menu::MenuItemBuilder::new("Open").id("open").build(app).unwrap();
-        let start = tauri::menu::MenuItemBuilder::new("Start")
+        let open = tauri::menu::MenuItemBuilder::new("Open in Browser")
+            .id("open")
+            .enabled(running && !is_busy)
+            .build(app)
+            .unwrap();
+        let start_label = if busy_state == TrayBusyState::Starting { "Starting..." } else { "Start" };
+        let stop_label = if busy_state == TrayBusyState::Stopping { "Stopping..." } else { "Stop" };
+        let start = tauri::menu::MenuItemBuilder::new(start_label)
             .id("start")
-            .enabled(!running)
+            .enabled(!running && !is_busy)
             .build(app)
             .unwrap();
-        let stop = tauri::menu::MenuItemBuilder::new("Stop")
+        let stop = tauri::menu::MenuItemBuilder::new(stop_label)
             .id("stop")
-            .enabled(running)
+            .enabled(running && !is_busy)
             .build(app)
             .unwrap();
-        let quit = tauri::menu::MenuItemBuilder::new("Quit").id("quit").build(app).unwrap();
+        let quit = tauri::menu::MenuItemBuilder::new("Quit")
+            .id("quit")
+            .enabled(!is_busy)
+            .build(app)
+            .unwrap();
         let menu = tauri::menu::MenuBuilder::new(app)
             .items(&[&open, &start, &stop, &quit])
             .build()
@@ -303,27 +383,144 @@ fn update_tray_menu(app: &AppHandle) {
     }
 }
 
+fn sync_server_state(app: &AppHandle) -> bool {
+    set_tray_busy_state(TrayBusyState::Idle);
+    let running = is_server_running();
+    let _ = app.emit("server-status", running);
+    update_tray_menu(app);
+    running
+}
+
+fn ensure_started(app: &AppHandle) -> Result<(), String> {
+    do_install(app)?;
+
+    if let Err(start_error) = do_start_server() {
+        if is_installed(app) {
+            emit_log(app, "==> Startup failed. Revalidating installation and retrying once...");
+            clear_installed_marker(app);
+            do_install(app)?;
+            do_start_server()?;
+            return Ok(());
+        }
+        return Err(start_error);
+    }
+
+    Ok(())
+}
+
+fn launch_start_server(app: AppHandle) {
+    set_tray_busy_state(TrayBusyState::Starting);
+    update_tray_menu(&app);
+    std::thread::spawn(move || {
+        if let Err(error) = ensure_started(&app) {
+            eprintln!("Start error: {}", error);
+            let _ = app.emit("install-error", error);
+            sync_server_state(&app);
+            return;
+        }
+        sync_server_state(&app);
+    });
+}
+
+fn launch_stop_server(app: AppHandle) {
+    set_tray_busy_state(TrayBusyState::Stopping);
+    update_tray_menu(&app);
+    std::thread::spawn(move || {
+        do_stop_server();
+        wait_for_server_stop();
+        sync_server_state(&app);
+    });
+}
+
+#[derive(Serialize)]
+struct InitialState {
+    installed: bool,
+    server_running: bool,
+}
+
+#[tauri::command]
+fn get_initial_state(app: AppHandle) -> InitialState {
+    let installed = is_installed(&app) && is_install_valid(&app);
+    if !installed && is_installed(&app) {
+        clear_installed_marker(&app);
+    }
+
+    InitialState {
+        installed,
+        server_running: is_server_running(),
+    }
+}
+
+#[tauri::command]
+fn get_server_status() -> bool {
+    is_server_running()
+}
+
+#[tauri::command]
+fn open_url() {
+    let url = format!("http://{}:{}", SERVER_HOST, SERVER_PORT);
+    let _ = tauri_plugin_opener::open_url(url, None::<&str>);
+}
+
+#[tauri::command]
+fn start_server(app: AppHandle) {
+    launch_start_server(app);
+}
+
+#[tauri::command]
+fn retry_install(app: AppHandle) {
+    launch_start_server(app);
+}
+
+#[tauri::command]
+fn stop_server(app: AppHandle) {
+    launch_stop_server(app);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            // Hide from Dock on macOS
+            // Show in Dock on macOS
             #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            app.set_activation_policy(tauri::ActivationPolicy::Regular);
 
-            let open = tauri::menu::MenuItemBuilder::new("Open").id("open").build(app)?;
+            let open = tauri::menu::MenuItemBuilder::new("Open in Browser").id("open").build(app)?;
             let start = tauri::menu::MenuItemBuilder::new("Start").id("start").build(app)?;
             let stop = tauri::menu::MenuItemBuilder::new("Stop").id("stop").enabled(false).build(app)?;
             let quit = tauri::menu::MenuItemBuilder::new("Quit").id("quit").build(app)?;
             let menu = tauri::menu::MenuBuilder::new(app).items(&[&open, &start, &stop, &quit]).build()?;
+
+            if let Some(window) = app.get_webview_window("main") {
+                let window_for_events = window.clone();
+                let _ = window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        if !APP_IS_QUITTING.load(Ordering::SeqCst) {
+                            api.prevent_close();
+                            let _ = window_for_events.hide();
+                        }
+                    }
+                });
+            }
 
             let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png")).unwrap();
             let _tray = tauri::tray::TrayIconBuilder::with_id("main")
                 .icon(tray_icon)
                 .icon_as_template(true)
                 .menu(&menu)
-                .show_menu_on_left_click(true)
+                .show_menu_on_left_click(false)
+                .on_tray_icon_event(|tray, event| {
+                    if let tauri::tray::TrayIconEvent::Click { button: tauri::tray::MouseButton::Left, .. } = event {
+                        let app = tray.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.unminimize();
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                        let _ = app.emit("show-dashboard", ());
+                    }
+                })
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "open" => {
                         let url = format!("http://{}:{}", SERVER_HOST, SERVER_PORT);
@@ -331,26 +528,16 @@ pub fn run() {
                     }
                     "start" => {
                         let app = app.clone();
-                        std::thread::spawn(move || {
-                            if let Err(e) = do_install(&app) {
-                                eprintln!("Install error: {}", e);
-                                return;
-                            }
-                            if let Err(e) = do_start_server() {
-                                eprintln!("Start error: {}", e);
-                                return;
-                            }
-                            update_tray_menu(&app);
-                        });
+                        launch_start_server(app);
                     }
                     "stop" => {
                         let app = app.clone();
-                        std::thread::spawn(move || {
-                            do_stop_server();
-                            update_tray_menu(&app);
-                        });
+                        launch_stop_server(app);
                     }
-                    "quit" => app.exit(0),
+                    "quit" => {
+                        APP_IS_QUITTING.store(true, Ordering::SeqCst);
+                        app.exit(0)
+                    },
                     _ => {}
                 })
                 .build(app)?;
@@ -358,14 +545,14 @@ pub fn run() {
             // Auto start on launch
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {
-                let already_installed = is_installed(&app_handle);
+                let already_installed = is_installed(&app_handle) && is_install_valid(&app_handle);
                 if !already_installed {
                     if let Some(window) = app_handle.get_webview_window("main") {
                         let _ = window.show();
                         let _ = window.set_focus();
                     }
                 }
-                if let Err(e) = do_install(&app_handle) {
+                if let Err(e) = ensure_started(&app_handle) {
                     if e.contains("REBOOT_REQUIRED") {
                         let _ = app_handle.emit("install-reboot", "WSL components installed. Please restart your computer, then reopen the app.");
                     } else {
@@ -373,20 +560,29 @@ pub fn run() {
                     }
                     return;
                 }
-                if let Some(window) = app_handle.get_webview_window("main") {
-                    let _ = window.hide();
+                let server_running = is_server_running();
+                if already_installed {
+                    let _ = app_handle.emit("show-dashboard", server_running);
+                } else {
+                    let _ = app_handle.emit("install-success", server_running);
                 }
-                if let Err(e) = do_start_server() {
-                    let _ = app_handle.emit("install-error", e);
-                    return;
-                }
-                update_tray_menu(&app_handle);
+                sync_server_state(&app_handle);
             });
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![reboot_system])
+        .invoke_handler(tauri::generate_handler![reboot_system, get_initial_state, get_server_status, open_url, start_server, retry_install, stop_server])
         .build(tauri::generate_context!())
         .expect("failed to start")
-        .run(|_app, _event| {});
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { has_visible_windows, .. } = event {
+                if !has_visible_windows {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                }
+            }
+        });
 }

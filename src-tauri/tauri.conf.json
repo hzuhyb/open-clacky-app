@@ -18,8 +18,8 @@
         "resizable": true,
         "center": true,
         "hiddenTitle": true,
-        "visible": false,
-        "skipTaskbar": true
+        "visible": true,
+        "skipTaskbar": false
       }
     ],
     "security": {
